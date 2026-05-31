@@ -154,11 +154,12 @@ async function refreshTeamStats() {
   }
 
   TEAMS.splice(0, TEAMS.length, ...freshTeams.map(statboticsTeam));
-  rankTeams();
   answerPool = TEAMS.slice(0, ANSWER_POOL_SIZE);
 }
 
 function statboticsTeam(row) {
+  const gameSpecificEpa = row.epa?.total_points?.mean ?? row.epa?.breakdown?.total_points ?? 0;
+
   return {
     team: row.team,
     name: row.name,
@@ -166,7 +167,8 @@ function statboticsTeam(row) {
     state: row.state || "",
     district: row.district ? row.district.toUpperCase() : "None",
     rookie: row.rookie_year,
-    epa: Math.round(row.epa?.norm ?? row.epa?.unitless ?? row.epa?.total_points?.mean ?? 0),
+    rank: row.epa?.ranks?.total?.rank || 0,
+    epa: Number(gameSpecificEpa.toFixed(1)),
     win: Number(((row.record?.winrate ?? 0) * 100).toFixed(1))
   };
 }
@@ -278,7 +280,7 @@ function renderGuess(guess) {
     cell(regionLabel(guess), classes[4]),
     cell(arrow(guess.rookie, answer.rookie), classes[5]),
     cell(rankArrow(guess.rank, answer.rank), classes[6]),
-    cell(arrow(guess.epa, answer.epa), classes[7]),
+    cell(arrow(guess.epa, answer.epa, (value) => value.toFixed(1)), classes[7]),
     cell(arrow(guess.win, answer.win, (value) => `${value.toFixed(1)}%`), classes[8])
   ].join("");
   guessesEl.prepend(row);
@@ -720,7 +722,7 @@ function revealAnswer(prefix) {
   card.className = "answer-card";
   card.innerHTML = `
     <strong>${prefix} ${answer.team} - ${answer.name}</strong>
-    <span>${region(answer)} | ${regionLabel(answer)} | #${answer.rank} EPA rank | ${answer.epa} EPA | ${answer.win.toFixed(1)}% win rate</span>
+    <span>${region(answer)} | ${regionLabel(answer)} | #${answer.rank} EPA rank | ${answer.epa.toFixed(1)} EPA | ${answer.win.toFixed(1)}% win rate</span>
   `;
   guessesEl.before(card);
 }
