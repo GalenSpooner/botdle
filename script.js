@@ -60,12 +60,35 @@ const FIRST_WIN_NAME_PROMPT_KEY = "botdle-first-win-name-prompted";
 const COMPETITION_HINT_CACHE_KEY = "botdle-competition-hints-v1";
 const COMPETITION_HINT_CACHE_MS = 24 * 60 * 60 * 1000;
 const STATBOTICS_API = "https://api.statbotics.io/v3";
+const CURRENT_SEASON = new Date().getFullYear();
+const TEAM_LOAD_LIMIT = 50;
+const ANSWER_POOL_SIZE = 30;
+const BLOCKED_NAME_PATTERNS = [
+  { reason: "profanity", pattern: "f+u+c+k+" },
+  { reason: "profanity", pattern: "s+h+i+t+" },
+  { reason: "harassment", pattern: "b+i+t+c+h+" },
+  { reason: "sexual", pattern: "c+u+n+t+" },
+  { reason: "sexual", pattern: "d+i+c+k+" },
+  { reason: "sexual", pattern: "c+o+c+k+" },
+  { reason: "sexual", pattern: "p+u+s+s+y+" },
+  { reason: "harassment", pattern: "w+h+o+r+e+" },
+  { reason: "harassment", pattern: "s+l+u+t+" },
+  { reason: "sexual", pattern: "r+a+p+e+" },
+  { reason: "sexual", pattern: "p+o+r+n+" },
+  { reason: "hate", pattern: "n+a+z+i+" },
+  { reason: "hate", pattern: "h+i+t+l+e+r+" },
+  { reason: "self-harm", pattern: "k+y+s+" },
+  { reason: "hate", pattern: "n+i+g+g+" },
+  { reason: "hate", pattern: "f+a+g+" },
+  { reason: "harassment", pattern: "r+e+t+a+r+d+" }
+].map((entry) => ({
+  ...entry,
+  regex: new RegExp(entry.pattern, "i")
+}));
 const SUPABASE_TABLE = "botdle_scores";
 const SUPABASE_CONFIG = window.BOTDLE_SUPABASE || {};
-const answerPool = TEAMS.slice(0, 30);
-TEAMS.forEach((team, index) => {
-  team.rank = index + 1;
-});
+let answerPool = TEAMS.slice(0, ANSWER_POOL_SIZE);
+rankTeams();
 
 const form = document.querySelector("#guess-form");
 const input = document.querySelector("#team-input");
@@ -122,6 +145,38 @@ function supabaseHeaders(extra = {}) {
     Authorization: `Bearer ${SUPABASE_CONFIG.anonKey}`,
     ...extra
   };
+}
+
+async function refreshTeamStats() {
+  const freshTeams = await fetchStatbotics(`team_years?year=${CURRENT_SEASON}&limit=${TEAM_LOAD_LIMIT}&metric=epa&ascending=false`);
+  if (!Array.isArray(freshTeams) || !freshTeams.length) {
+    throw new Error("No fresh Statbotics team data returned");
+  }
+
+  TEAMS.splice(0, TEAMS.length, ...freshTeams.map(statboticsTeam));
+  rankTeams();
+  answerPool = TEAMS.slice(0, ANSWER_POOL_SIZE);
+}
+
+function statboticsTeam(row) {
+  return {
+    team: row.team,
+    name: row.name,
+    country: row.country || "",
+    state: row.state || "",
+    district: row.district ? row.district.toUpperCase() : "None",
+    rookie: row.rookie_year,
+    epa: Math.round(row.epa?.norm ?? row.epa?.unitless ?? row.epa?.total_points?.mean ?? 0),
+    win: Number(((row.record?.winrate ?? 0) * 100).toFixed(1))
+  };
+}
+
+function rankTeams() {
+  TEAMS
+    .sort((a, b) => b.epa - a.epa || a.team - b.team)
+    .forEach((team, index) => {
+      team.rank = index + 1;
+    });
 }
 
 function chooseAnswer() {
@@ -231,7 +286,7 @@ function renderGuess(guess) {
 
 function updateStatus() {
   guessCountEl.textContent = `${guesses.length} / ${MAX_GUESSES}`;
-  poolSizeEl.textContent = `${TEAMS.length} top EPA teams`;
+  poolSizeEl.textContent = `${TEAMS.length} top ${CURRENT_SEASON} EPA teams`;
   progressFillEl.style.width = `${(guesses.length / MAX_GUESSES) * 100}%`;
   emptyStateEl.hidden = guesses.length > 0;
 }
@@ -285,10 +340,29 @@ function playerName() {
 
 function savePlayerName() {
   const name = playerNameInput.value.trim().slice(0, 24);
+  const blockedReason = blockedNameReason(name);
+  if (name && blockedReason) {
+    playerNameInput.value = "";
+    localStorage.removeItem("botdle-player-name");
+    messageEl.textContent = "Choose a different leaderboard name.";
+    return false;
+  }
+
   if (name) {
     localStorage.setItem("botdle-player-name", name);
   } else {
     localStorage.removeItem("botdle-player-name");
+  }
+  return true;
+}
+
+function validatePlayerNameInput() {
+  const name = playerNameInput.value.trim();
+  if (name && blockedNameReason(name)) {
+    playerNameInput.setCustomValidity("Choose a different leaderboard name.");
+    messageEl.textContent = "Choose a different leaderboard name.";
+  } else {
+    playerNameInput.setCustomValidity("");
   }
 }
 
@@ -317,12 +391,22 @@ function explicitPlayerName() {
   const currentName = playerNameInput.value.trim();
   const storedName = savedPlayerName();
   const name = currentName || storedName;
-  return name.toLocaleLowerCase() === "anonymous" ? "" : name;
+  return name.toLocaleLowerCase() === "anonymous" || blockedNameReason(name) ? "" : name;
 }
 
 function savedPlayerName() {
   const storedName = localStorage.getItem("botdle-player-name") || "";
-  return storedName.toLocaleLowerCase() === "anonymous" ? "" : storedName;
+  return storedName.toLocaleLowerCase() === "anonymous" || blockedNameReason(storedName) ? "" : storedName;
+}
+
+function blockedNameReason(name) {
+  const normalizedName = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLocaleLowerCase();
+  if (!normalizedName) return "";
+  return BLOCKED_NAME_PATTERNS.find((entry) => entry.regex.test(normalizedName))?.reason || "";
 }
 
 function updateStats() {
@@ -580,6 +664,13 @@ function promptForFirstWinName() {
     const finish = (name = "") => {
       const cleanName = name.trim().slice(0, 24);
       if (cleanName) {
+        const blockedReason = blockedNameReason(cleanName);
+        if (blockedReason) {
+          nameDialogInput.value = "";
+          nameDialogInput.placeholder = "Try a different name";
+          return;
+        }
+
         playerNameInput.value = cleanName;
         savePlayerName();
       }
@@ -761,12 +852,29 @@ function resetGame() {
   input.focus();
 }
 
+async function initializeGame() {
+  input.disabled = true;
+  giveUpButton.disabled = true;
+  newGameButton.disabled = true;
+  messageEl.textContent = `Loading fresh ${CURRENT_SEASON} EPA stats...`;
+
+  try {
+    await refreshTeamStats();
+  } catch {
+    messageEl.textContent = "Fresh EPA stats could not load. Using the bundled fallback data.";
+  }
+
+  populateOptions();
+  resetGame();
+  newGameButton.disabled = false;
+}
+
 form.addEventListener("submit", submitGuess);
 newGameButton.addEventListener("click", resetGame);
 giveUpButton.addEventListener("click", giveUp);
 shareButton.addEventListener("click", shareGame);
 copyShareButton.addEventListener("click", copyShareOutput);
 clearLeaderboardButton.addEventListener("click", clearLeaderboard);
+playerNameInput.addEventListener("input", validatePlayerNameInput);
 playerNameInput.addEventListener("change", savePlayerName);
-populateOptions();
-resetGame();
+initializeGame();

@@ -43,6 +43,7 @@ declare
   clean_client_id text := nullif(trim(p_client_id), '');
   clean_player_name text := left(nullif(trim(p_player_name), ''), 24);
   clean_team_name text := left(nullif(trim(p_team_name), ''), 80);
+  normalized_player_name text;
   recent_duplicate boolean;
 begin
   if clean_client_id is null or char_length(clean_client_id) > 80 then
@@ -50,6 +51,34 @@ begin
   end if;
 
   if clean_player_name is null then
+    clean_player_name := 'Anonymous';
+  end if;
+
+  normalized_player_name := lower(regexp_replace(clean_player_name, '[^a-zA-Z0-9]', '', 'g'));
+
+  if exists (
+    select 1
+    from unnest(array[
+      'f+u+c+k+',
+      's+h+i+t+',
+      'b+i+t+c+h+',
+      'c+u+n+t+',
+      'd+i+c+k+',
+      'c+o+c+k+',
+      'p+u+s+s+y+',
+      'w+h+o+r+e+',
+      's+l+u+t+',
+      'r+a+p+e+',
+      'p+o+r+n+',
+      'n+a+z+i+',
+      'h+i+t+l+e+r+',
+      'k+y+s+',
+      'n+i+g+g+',
+      'f+a+g+',
+      'r+e+t+a+r+d+'
+    ]) as blocked(pattern)
+    where normalized_player_name ~ blocked.pattern
+  ) then
     clean_player_name := 'Anonymous';
   end if;
 
